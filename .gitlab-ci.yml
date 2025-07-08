@@ -1,0 +1,104 @@
+image: growerp/flutter-sdk-image:3.27.4
+
+stages:
+  - build
+  - release
+
+before_script:
+  - flutter --version
+  - flutter pub get
+
+build_apk:
+  stage: build
+  variables:
+    SECURE_FILES_DOWNLOAD_PATH: './'
+  script:
+    # Usa $CI_COMMIT_BRANCH que contém branch 
+    - curl --silent "https://gitlab.com/gitlab-org/incubation-engineering/mobile-devops/download-secure-files/-/raw/main/installer" | bash
+    - mv key.properties android/
+    - mv ufsm.keystore android/app/
+    - export ENV=$CI_COMMIT_BRANCH
+    - echo "Usando o ambiente:" $ENV
+    - flutter build apk --release --dart-define=ENV=dev
+    - mv build/app/outputs/flutter-apk/*.apk .
+    #- flutter build appbundle --release --dart-define=ENV=main
+    #- mv build/app/outputs/bundle/release/*.aab .
+  artifacts:
+    name: "$CI_COMMIT_REF_NAME"
+    paths:
+      - "*.apk" # Nome do artefato inclui a branch/tag
+     # - "*.aab" # Nome do artefato inclui a branch/tag
+    expire_in: 1 day
+  except:
+    - main
+    - production
+
+build_apk_main:
+  stage: build
+  variables:
+    SECURE_FILES_DOWNLOAD_PATH: './'
+  script:
+    # Usa $CI_COMMIT_BRANCH que contém branch 
+    - curl --silent "https://gitlab.com/gitlab-org/incubation-engineering/mobile-devops/download-secure-files/-/raw/main/installer" | bash
+    - mv key.properties android/
+    - mv ufsm.keystore android/app/
+    - export ENV=$CI_COMMIT_BRANCH
+    - echo "Usando o ambiente:" $ENV
+    - flutter build apk --release --dart-define=ENV=$ENV
+    - mv build/app/outputs/flutter-apk/*.apk .
+    #- flutter build appbundle --release --dart-define=ENV=main
+    #- mv build/app/outputs/bundle/release/*.aab .
+  artifacts:
+    name: "$CI_COMMIT_REF_NAME"
+    paths:
+      - "*.apk" # Nome do artefato inclui a branch/tag
+     # - "*.aab" # Nome do artefato inclui a branch/tag
+    expire_in: 1 week
+  only:
+    - main
+
+build_apk_prod:
+  stage: build
+  variables:
+    SECURE_FILES_DOWNLOAD_PATH: './'
+  script:
+    # Usa $CI_COMMIT_BRANCH que contém branch 
+    - curl --silent "https://gitlab.com/gitlab-org/incubation-engineering/mobile-devops/download-secure-files/-/raw/main/installer" | bash
+    - mv key.properties android/
+    - mv ufsm.keystore android/app/
+    - export ENV=$CI_COMMIT_BRANCH
+    - echo "Usando o ambiente:" $ENV
+    - flutter build appbundle --release --obfuscate --split-debug-info=build/symbols --dart-define=ENV=prod
+    - mv build/app/outputs/bundle/release/*.aab .
+  artifacts:
+    name: "$CI_COMMIT_REF_NAME"
+    paths:
+      - "*.aab" # Nome do artefato inclui a branch/tag
+    expire_in: 1 week
+  only:
+    - production
+
+create_release:
+  image: alpine:latest
+  stage: release
+  dependencies:
+    - build_apk
+  before_script:
+    - apk add --no-cache curl jq  # Instala curl e jq para processar JSON
+  script:
+    - |
+      # Obtém o ID do job build_apk bem-sucedido
+      BUILD_APK_JOB_ID=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/pipelines/$CI_PIPELINE_ID/jobs" | jq -r '.[] | select(.name == "build_apk" and .status == "success").id')
+      # Constrói a URL do artefato
+      ASSET_URL="$CI_PROJECT_URL/-/jobs/$BUILD_APK_JOB_ID/artifacts/file/app-${CI_COMMIT_TAG}.apk"
+      # Cria a release
+      curl --request POST \
+        --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+        --form "name=Release ${CI_COMMIT_TAG}" \
+        --form "tag_name=${CI_COMMIT_TAG}" \
+        --form "description=APK gerado automaticamente pelo CI/CD" \
+        --form "assets[links][][name]=APK" \
+        --form "assets[links][][url]=${ASSET_URL}" \
+        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/releases"
+  only:
+    - tags  # Executa apenas quando uma tag é criada
